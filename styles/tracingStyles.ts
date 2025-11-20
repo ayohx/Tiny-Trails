@@ -41,6 +41,17 @@ export const styles = StyleSheet.create({
     backgroundColor: theme.colors.primary,
     borderRadius: 4
   },
+
+  coverageTextContainer: {
+    marginTop: theme.spacing.sm,
+    alignItems: 'center'
+  },
+
+  coverageText: {
+    fontSize: theme.typography.fontSize.medium,
+    fontFamily: theme.typography.fontFamily.medium,
+    color: theme.colors.text
+  },
   
   mascot: {
     position: 'absolute',

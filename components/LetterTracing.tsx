@@ -1,12 +1,12 @@
-import React, { useState, useRef } from 'react';
-import { View, Dimensions, PanResponder, Platform } from 'react-native';
-import Svg, { Path, Circle, Defs, LinearGradient, Stop } from 'react-native-svg';
+import React, { useState, useRef, useCallback } from 'react';
+import { View, Dimensions } from 'react-native';
+import Svg, { Path, Circle, Defs, LinearGradient, Stop, G } from 'react-native-svg';
+import { GestureDetector, Gesture } from 'react-native-gesture-handler';
 import Animated, {
   useSharedValue,
   useAnimatedStyle,
   withSpring,
   withSequence,
-  withTiming
 } from '@/utils/animatedCompat';
 import CelebrationOverlay from './CelebrationOverlay';
 import { theme } from '@/styles/theme';
@@ -14,11 +14,23 @@ import { getLetterPath, getLetterDots } from '@/utils/letterPaths';
 import { triggerHapticFeedback } from '@/utils/audioUtils';
 import { styles } from '@/styles/tracingStyles';
 import TikoMascot from './TikoMascot';
+import {
+  Point,
+  smoothPath,
+  simplifyPath,
+  pointsToSvgPath,
+  isPointNearPath,
+  calculatePathCoverage,
+  getStrokeVelocity,
+  shouldAddPoint,
+} from '@/utils/pathSmoothing';
 
 const AnimatedView = Animated.View;
 
-const { width: screenWidth, height: screenHeight } = Dimensions.get('window');
+const { width: screenWidth } = Dimensions.get('window');
 const TRACING_SIZE = Math.min(screenWidth - 40, 300);
+const COMPLETION_THRESHOLD = 75; // 75% coverage needed
+const PATH_TOLERANCE = 30; // Pixels tolerance for path matching
 
 interface LetterTracingProps {
   letter: string;
@@ -27,186 +39,275 @@ interface LetterTracingProps {
 }
 
 export default function LetterTracing({ letter, onComplete, showCelebration }: LetterTracingProps) {
-  const [tracedDots, setTracedDots] = useState<Set<number>>(new Set());
-  const [currentPath, setCurrentPath] = useState('');
+  // Path tracking state
+  const [rawPoints, setRawPoints] = useState<Point[]>([]);
+  const [smoothedPath, setSmoothedPath] = useState<string>('');
   const [isTracing, setIsTracing] = useState(false);
+  const [coverage, setCoverage] = useState(0);
   const [mascotState, setMascotState] = useState<'idle' | 'active' | 'success'>('idle');
 
+  // Animation values
   const scale = useSharedValue(1);
-  const rotation = useSharedValue(0);
+  const pathOpacity = useSharedValue(1);
 
+  // References
+  const lastPoint = useRef<Point | null>(null);
+  const strokeStartTime = useRef<number>(0);
+
+  // Get letter data
   const letterPath = getLetterPath(letter);
   const letterDots = getLetterDots(letter);
-  const totalDots = letterDots.length;
 
-  const checkDotProximity = (x: number, y: number) => {
-    const threshold = 25;
-    return letterDots.findIndex(dot => {
-      const distance = Math.sqrt(Math.pow(x - dot.x, 2) + Math.pow(y - dot.y, 2));
-      return distance <= threshold && !tracedDots.has(dot.id);
-    });
-  };
+  /**
+   * Add point to the drawing path with smoothing
+   */
+  const addPoint = useCallback((x: number, y: number) => {
+    const timestamp = Date.now();
+    const newPoint: Point = { x, y, timestamp };
 
-  const addToPath = (x: number, y: number) => {
-    setCurrentPath(prev => {
-      if (prev === '') {
-        return `M${x},${y}`;
-      }
-      return `${prev} L${x},${y}`;
-    });
-  };
-
-  const handleTouchStart = (x: number, y: number) => {
-    setIsTracing(true);
-    setMascotState('active');
-    const dotIndex = checkDotProximity(x, y);
-
-    if (dotIndex !== -1) {
-      setTracedDots(prev => new Set([...prev, letterDots[dotIndex].id]));
-      addToPath(x, y);
-      triggerHapticFeedback();
-
-      scale.value = withSequence(
-        withSpring(theme.mascot.states.active.scale),
-        withSpring(1)
-      );
-    }
-  };
-
-  const handleTouchMove = (x: number, y: number) => {
-    const dotIndex = checkDotProximity(x, y);
-
-    if (dotIndex !== -1) {
-      setTracedDots(prev => {
-        const newSet = new Set([...prev, letterDots[dotIndex].id]);
-
-        if (newSet.size === totalDots) {
-          setMascotState('success');
-          setTimeout(() => {
-            onComplete();
-            setTracedDots(new Set());
-            setCurrentPath('');
-            setMascotState('idle');
-          }, 1000);
+    setRawPoints((prev) => {
+      // Check if we should add this point based on distance and velocity
+      if (prev.length > 0) {
+        const velocity = getStrokeVelocity([...prev, newPoint]);
+        if (!shouldAddPoint(prev[prev.length - 1], newPoint, velocity)) {
+          return prev;
         }
+      }
 
-        return newSet;
-      });
-      addToPath(x, y);
-      triggerHapticFeedback();
-    } else if (isTracing) {
-      addToPath(x, y);
-    }
-  };
+      const updatedPoints = [...prev, newPoint];
 
-  const handleTouchEnd = () => {
-    setIsTracing(false);
+      // Smooth the path if we have enough points
+      if (updatedPoints.length >= 3) {
+        const simplified = simplifyPath(updatedPoints, 2);
+        const smoothed = smoothPath(simplified, 5);
+        const pathString = pointsToSvgPath(smoothed);
+        setSmoothedPath(pathString);
+
+        // Calculate coverage
+        const coveragePercent = calculatePathCoverage(smoothed, letterDots, PATH_TOLERANCE);
+        setCoverage(coveragePercent);
+
+        // Check for completion
+        if (coveragePercent >= COMPLETION_THRESHOLD) {
+          handleComplete();
+        }
+      } else {
+        // For first few points, draw straight lines
+        setSmoothedPath(pointsToSvgPath(updatedPoints));
+      }
+
+      lastPoint.current = newPoint;
+      return updatedPoints;
+    });
+  }, [letterDots]);
+
+  /**
+   * Handle completion of letter tracing
+   */
+  const handleComplete = useCallback(() => {
+    setMascotState('success');
+    triggerHapticFeedback('success');
+
+    scale.value = withSequence(
+      withSpring(1.2),
+      withSpring(1)
+    );
+
+    setTimeout(() => {
+      onComplete();
+      resetPath();
+    }, 1500);
+  }, [onComplete, scale]);
+
+  /**
+   * Reset the drawing path
+   */
+  const resetPath = useCallback(() => {
+    setRawPoints([]);
+    setSmoothedPath('');
+    setCoverage(0);
     setMascotState('idle');
+    lastPoint.current = null;
+  }, []);
+
+  /**
+   * Gesture handlers for smooth touch/mouse input
+   */
+  const panGesture = Gesture.Pan()
+    .onStart((event) => {
+      setIsTracing(true);
+      setMascotState('active');
+      strokeStartTime.current = Date.now();
+      addPoint(event.x, event.y);
+    })
+    .onUpdate((event) => {
+      if (isTracing) {
+        addPoint(event.x, event.y);
+      }
+    })
+    .onEnd(() => {
+      setIsTracing(false);
+      setMascotState('idle');
+    })
+    .onFinalize(() => {
+      setIsTracing(false);
+      setMascotState('idle');
+    });
+
+  /**
+   * Get feedback color based on coverage
+   */
+  const getFeedbackColor = (): string => {
+    if (coverage < 30) return theme.colors.error;
+    if (coverage < 60) return theme.colors.warning;
+    if (coverage < COMPLETION_THRESHOLD) return theme.colors.info;
+    return theme.colors.success;
   };
 
-  const panResponder = useRef(
-    PanResponder.create({
-      onStartShouldSetPanResponder: () => true,
-      onMoveShouldSetPanResponder: () => true,
-      onPanResponderGrant: (evt) => {
-        const { locationX, locationY } = evt.nativeEvent;
-        handleTouchStart(locationX, locationY);
-      },
-      onPanResponderMove: (evt) => {
-        const { locationX, locationY } = evt.nativeEvent;
-        handleTouchMove(locationX, locationY);
-      },
-      onPanResponderRelease: () => {
-        handleTouchEnd();
-      },
-    })
-  ).current;
+  /**
+   * Determine if point is on the correct path
+   */
+  const isOnPath = useCallback((point: Point): boolean => {
+    return isPointNearPath(point, letterDots, PATH_TOLERANCE);
+  }, [letterDots]);
 
+  /**
+   * Animated styles
+   */
   const animatedStyle = useAnimatedStyle(() => ({
-    transform: [
-      { scale: scale.value },
-      { rotate: `${rotation.value}deg` }
-    ],
+    transform: [{ scale: scale.value }],
+  }));
+
+  const pathAnimatedStyle = useAnimatedStyle(() => ({
+    opacity: pathOpacity.value,
   }));
 
   return (
     <View style={styles.container}>
       <AnimatedView style={[styles.tracingArea, animatedStyle]}>
-        <View {...panResponder.panHandlers} style={styles.touchArea}>
-          <Svg width={TRACING_SIZE} height={TRACING_SIZE} viewBox={`0 0 ${TRACING_SIZE} ${TRACING_SIZE}`}>
-            <Defs>
-              <LinearGradient id="rainbow" x1="0%" y1="0%" x2="100%" y2="100%">
-                {theme.colors.rainbow.map((color, index) => (
-                  <Stop
-                    key={index}
-                    offset={`${(index / (theme.colors.rainbow.length - 1)) * 100}%`}
-                    stopColor={color}
+        <GestureDetector gesture={panGesture}>
+          <View style={styles.touchArea}>
+            <Svg
+              width={TRACING_SIZE}
+              height={TRACING_SIZE}
+              viewBox={`0 0 ${TRACING_SIZE} ${TRACING_SIZE}`}
+            >
+              <Defs>
+                <LinearGradient id="rainbow" x1="0%" y1="0%" x2="100%" y2="100%">
+                  {theme.colors.rainbow.map((color, index) => (
+                    <Stop
+                      key={index}
+                      offset={`${(index / (theme.colors.rainbow.length - 1)) * 100}%`}
+                      stopColor={color}
+                    />
+                  ))}
+                </LinearGradient>
+                <LinearGradient id="glow" x1="0%" y1="0%" x2="0%" y2="100%">
+                  <Stop offset="0%" stopColor={getFeedbackColor()} stopOpacity="0.8" />
+                  <Stop offset="100%" stopColor={getFeedbackColor()} stopOpacity="0.3" />
+                </LinearGradient>
+              </Defs>
+
+              <G>
+                {/* Letter outline - guide path */}
+                <Path
+                  d={letterPath}
+                  stroke={theme.colors.border}
+                  strokeWidth="4"
+                  fill="none"
+                  strokeDasharray="10,5"
+                  opacity={0.4}
+                />
+
+                {/* Glowing guide when tracing */}
+                {isTracing && (
+                  <Path
+                    d={letterPath}
+                    stroke="url(#glow)"
+                    strokeWidth="8"
+                    fill="none"
+                    opacity={0.3}
                   />
-                ))}
-              </LinearGradient>
-            </Defs>
+                )}
 
-            {/* Letter outline */}
-            <Path
-              d={letterPath}
-              stroke={theme.colors.border}
-              strokeWidth="3"
-              fill="none"
-              strokeDasharray="10,5"
-              opacity={0.6}
-            />
+                {/* Guide dots - start and key points */}
+                {letterDots.map((dot, index) => {
+                  // Show only start dot and every 5th dot for guidance
+                  const shouldShow = index === 0 || index % 5 === 0;
+                  if (!shouldShow) return null;
 
-            {/* Guide dots */}
-            {letterDots.map((dot, index) => (
-              <Circle
-                key={dot.id}
-                cx={dot.x}
-                cy={dot.y}
-                r={tracedDots.has(dot.id) ? 0 : 8}
-                fill={tracedDots.has(dot.id)
-                  ? theme.colors.rainbow[index % theme.colors.rainbow.length]
-                  : theme.colors.border}
-                opacity={tracedDots.has(dot.id) ? 0.8 : 0.5}
-              />
-            ))}
+                  const isCovered = rawPoints.some(
+                    (p) => Math.sqrt(Math.pow(p.x - dot.x, 2) + Math.pow(p.y - dot.y, 2)) < PATH_TOLERANCE
+                  );
 
-            {/* Traced path with rainbow effect */}
-            {currentPath && (
-              <Path
-                d={currentPath}
-                stroke="url(#rainbow)"
-                strokeWidth="6"
-                fill="none"
-                strokeLinecap="round"
-                strokeLinejoin="round"
-                opacity={0.9}
-              />
-            )}
-          </Svg>
-        </View>
+                  return (
+                    <Circle
+                      key={dot.id}
+                      cx={dot.x}
+                      cy={dot.y}
+                      r={index === 0 ? 12 : 8}
+                      fill={isCovered ? theme.colors.success : theme.colors.primary}
+                      opacity={isCovered ? 0.3 : 0.6}
+                      stroke={index === 0 ? theme.colors.primary : 'none'}
+                      strokeWidth={index === 0 ? 3 : 0}
+                    />
+                  );
+                })}
+
+                {/* User's traced path with rainbow gradient */}
+                {smoothedPath && (
+                  <Path
+                    d={smoothedPath}
+                    stroke="url(#rainbow)"
+                    strokeWidth="8"
+                    fill="none"
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                    opacity={0.9}
+                  />
+                )}
+
+                {/* Drawing cursor when active */}
+                {isTracing && lastPoint.current && (
+                  <Circle
+                    cx={lastPoint.current.x}
+                    cy={lastPoint.current.y}
+                    r={6}
+                    fill={getFeedbackColor()}
+                    opacity={0.7}
+                  />
+                )}
+              </G>
+            </Svg>
+          </View>
+        </GestureDetector>
       </AnimatedView>
 
-      {/* Progress indicator */}
+      {/* Progress indicator with visual feedback */}
       <View style={styles.progressContainer}>
         <View style={styles.progressBar}>
-          <View
+          <Animated.View
             style={[
               styles.progressFill,
+              pathAnimatedStyle,
               {
-                width: `${(tracedDots.size / totalDots) * 100}%`,
-                backgroundColor: theme.colors.primary
-              }
+                width: `${Math.min(coverage, 100)}%`,
+                backgroundColor: getFeedbackColor(),
+              },
             ]}
           />
+        </View>
+        <View style={styles.coverageTextContainer}>
+          <Animated.Text style={[styles.coverageText, { color: getFeedbackColor() }]}>
+            {Math.round(coverage)}% Complete
+          </Animated.Text>
         </View>
       </View>
 
       {/* Tiko Mascot */}
-      <TikoMascot
-        state={mascotState}
-        style={styles.mascot}
-      />
+      <TikoMascot state={mascotState} style={styles.mascot} />
 
+      {/* Celebration overlay */}
       {showCelebration && <CelebrationOverlay />}
     </View>
   );

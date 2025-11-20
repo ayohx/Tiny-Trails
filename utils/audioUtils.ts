@@ -1,5 +1,6 @@
 import { Platform } from 'react-native';
 import { Audio } from 'expo-av';
+import * as Haptics from 'expo-haptics';
 
 // Web-compatible audio implementation
 export const playAudio = async (type: 'success' | 'letter' | 'word', content?: string) => {
@@ -60,11 +61,20 @@ export const playAudio = async (type: 'success' | 'letter' | 'word', content?: s
 };
 
 // Haptic feedback helper
-export const triggerHapticFeedback = async () => {
+export const triggerHapticFeedback = async (type: 'light' | 'medium' | 'heavy' | 'success' = 'medium') => {
   if (Platform.OS !== 'web') {
     try {
-      const ExpoHaptics = await import('expo-haptics');
-      await ExpoHaptics.impactAsync(ExpoHaptics.ImpactFeedbackStyle.Medium);
+      if (type === 'success') {
+        await Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+      } else {
+        const style = type === 'light' 
+          ? Haptics.ImpactFeedbackStyle.Light 
+          : type === 'heavy'
+          ? Haptics.ImpactFeedbackStyle.Heavy
+          : Haptics.ImpactFeedbackStyle.Medium;
+        
+        await Haptics.impactAsync(style);
+      }
     } catch (error) {
       console.log('Haptics not available:', error);
     }

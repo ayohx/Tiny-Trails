@@ -24,6 +24,8 @@ export const theme = {
     border: '#E2E8F0',
     success: '#58C472',
     error: '#FF6B6B',
+    warning: '#FFC940',
+    info: '#3DA9F5',
     
     // Rainbow Gradient for Tracing
     rainbow: [
