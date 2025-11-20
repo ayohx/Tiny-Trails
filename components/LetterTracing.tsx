@@ -42,8 +42,10 @@ interface LetterTracingProps {
 
 export default function LetterTracing({ letter, onComplete, showCelebration }: LetterTracingProps) {
   // Path tracking state
-  const [rawPoints, setRawPoints] = useState<Point[]>([]);
-  const [smoothedPath, setSmoothedPath] = useState<string>('');
+  const [allStrokes, setAllStrokes] = useState<Point[][]>([]); // Store all completed strokes
+  const [currentStroke, setCurrentStroke] = useState<Point[]>([]); // Track current stroke
+  const [strokePaths, setStrokePaths] = useState<string[]>([]); // SVG paths for completed strokes
+  const [currentStrokePath, setCurrentStrokePath] = useState<string>(''); // Current stroke path
   const [isTracing, setIsTracing] = useState(false);
   const [coverage, setCoverage] = useState(0);
   const [mascotState, setMascotState] = useState<'idle' | 'active' | 'success'>('idle');
@@ -67,7 +69,7 @@ export default function LetterTracing({ letter, onComplete, showCelebration }: L
     const timestamp = Date.now();
     const newPoint: Point = { x, y, timestamp };
 
-    setRawPoints((prev) => {
+    setCurrentStroke((prev) => {
       // Check if we should add this point based on distance and velocity
       if (prev.length > 0) {
         const velocity = getStrokeVelocity([...prev, newPoint]);
@@ -76,32 +78,34 @@ export default function LetterTracing({ letter, onComplete, showCelebration }: L
         }
       }
 
-      const updatedPoints = [...prev, newPoint];
+      const updatedStroke = [...prev, newPoint];
 
-      // Smooth the path if we have enough points
-      if (updatedPoints.length >= 3) {
-        const simplified = simplifyPath(updatedPoints, 2);
+      // Smooth the current stroke if we have enough points
+      if (updatedStroke.length >= 3) {
+        const simplified = simplifyPath(updatedStroke, 2);
         const smoothed = smoothPath(simplified, 5);
         const pathString = pointsToSvgPath(smoothed);
-        setSmoothedPath(pathString);
-
-        // Calculate coverage
-        const coveragePercent = calculatePathCoverage(smoothed, letterDots, PATH_TOLERANCE);
-        setCoverage(coveragePercent);
-
-        // Check for completion
-        if (coveragePercent >= COMPLETION_THRESHOLD) {
-          handleComplete();
-        }
+        setCurrentStrokePath(pathString);
       } else {
-        // For first few points, draw straight lines
-        setSmoothedPath(pointsToSvgPath(updatedPoints));
+        // For first few points in stroke, draw straight lines
+        const pathString = pointsToSvgPath(updatedStroke);
+        setCurrentStrokePath(pathString);
+      }
+
+      // Calculate coverage with all strokes + current stroke
+      const allPoints = [...allStrokes.flat(), ...updatedStroke];
+      const coveragePercent = calculatePathCoverage(allPoints, letterDots, PATH_TOLERANCE);
+      setCoverage(coveragePercent);
+
+      // Check for completion
+      if (coveragePercent >= COMPLETION_THRESHOLD) {
+        handleComplete();
       }
 
       lastPoint.current = newPoint;
-      return updatedPoints;
+      return updatedStroke;
     });
-  }, [letterDots]);
+  }, [allStrokes, letterDots]);
 
   /**
    * Handle completion of letter tracing
@@ -125,8 +129,10 @@ export default function LetterTracing({ letter, onComplete, showCelebration }: L
    * Reset the drawing path
    */
   const resetPath = useCallback(() => {
-    setRawPoints([]);
-    setSmoothedPath('');
+    setAllStrokes([]);
+    setCurrentStroke([]);
+    setStrokePaths([]);
+    setCurrentStrokePath('');
     setCoverage(0);
     setMascotState('idle');
     lastPoint.current = null;
@@ -137,6 +143,10 @@ export default function LetterTracing({ letter, onComplete, showCelebration }: L
    */
   const panGesture = Gesture.Pan()
     .onStart((event) => {
+      // Start a new stroke - clear current stroke state
+      setCurrentStroke([]);
+      setCurrentStrokePath('');
+      lastPoint.current = null;
       setIsTracing(true);
       setMascotState('active');
       strokeStartTime.current = Date.now();
@@ -148,12 +158,28 @@ export default function LetterTracing({ letter, onComplete, showCelebration }: L
       }
     })
     .onEnd(() => {
+      // End stroke - commit current stroke to completed strokes
+      if (currentStroke.length > 0) {
+        setAllStrokes((prev) => [...prev, currentStroke]);
+        setStrokePaths((prev) => [...prev, currentStrokePath]);
+      }
+      setCurrentStroke([]);
+      setCurrentStrokePath('');
       setIsTracing(false);
       setMascotState('idle');
+      lastPoint.current = null;
     })
     .onFinalize(() => {
+      // Finalize stroke - ensure state is clean
+      if (currentStroke.length > 0) {
+        setAllStrokes((prev) => [...prev, currentStroke]);
+        setStrokePaths((prev) => [...prev, currentStrokePath]);
+      }
+      setCurrentStroke([]);
+      setCurrentStrokePath('');
       setIsTracing(false);
       setMascotState('idle');
+      lastPoint.current = null;
     });
 
   /**
@@ -238,7 +264,9 @@ export default function LetterTracing({ letter, onComplete, showCelebration }: L
                   const shouldShow = index === 0 || index % 5 === 0;
                   if (!shouldShow) return null;
 
-                  const isCovered = rawPoints.some(
+                  // Check coverage across all strokes + current stroke
+                  const allPoints = [...allStrokes.flat(), ...currentStroke];
+                  const isCovered = allPoints.some(
                     (p) => Math.sqrt(Math.pow(p.x - dot.x, 2) + Math.pow(p.y - dot.y, 2)) < PATH_TOLERANCE
                   );
 
@@ -256,10 +284,24 @@ export default function LetterTracing({ letter, onComplete, showCelebration }: L
                   );
                 })}
 
-                {/* User's traced path with rainbow gradient */}
-                {smoothedPath && (
+                {/* Previously completed strokes with rainbow gradient */}
+                {strokePaths.map((path, index) => (
                   <Path
-                    d={smoothedPath}
+                    key={`stroke-${index}`}
+                    d={path}
+                    stroke="url(#rainbow)"
+                    strokeWidth="8"
+                    fill="none"
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                    opacity={0.9}
+                  />
+                ))}
+
+                {/* Current stroke being drawn with rainbow gradient */}
+                {currentStrokePath && (
+                  <Path
+                    d={currentStrokePath}
                     stroke="url(#rainbow)"
                     strokeWidth="8"
                     fill="none"
