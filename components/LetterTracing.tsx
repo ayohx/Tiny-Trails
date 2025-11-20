@@ -1,5 +1,5 @@
 import React, { useState, useRef, useCallback } from 'react';
-import { View, Dimensions } from 'react-native';
+import { View, Dimensions, Text } from 'react-native';
 import Svg, { Path, Circle, Defs, LinearGradient, Stop, G } from 'react-native-svg';
 import { GestureDetector, Gesture } from 'react-native-gesture-handler';
 import Animated, {
@@ -7,6 +7,7 @@ import Animated, {
   useAnimatedStyle,
   withSpring,
   withSequence,
+  createAnimatedComponent,
 } from '@/utils/animatedCompat';
 import CelebrationOverlay from './CelebrationOverlay';
 import { theme } from '@/styles/theme';
@@ -26,6 +27,7 @@ import {
 } from '@/utils/pathSmoothing';
 
 const AnimatedView = Animated.View;
+const AnimatedText = createAnimatedComponent(Text);
 
 const { width: screenWidth } = Dimensions.get('window');
 const TRACING_SIZE = Math.min(screenWidth - 40, 300);
@@ -298,9 +300,9 @@ export default function LetterTracing({ letter, onComplete, showCelebration }: L
           />
         </View>
         <View style={styles.coverageTextContainer}>
-          <Animated.Text style={[styles.coverageText, { color: getFeedbackColor() }]}>
+          <AnimatedText style={[styles.coverageText, { color: getFeedbackColor() }]}>
             {Math.round(coverage)}% Complete
-          </Animated.Text>
+          </AnimatedText>
         </View>
       </View>
 
