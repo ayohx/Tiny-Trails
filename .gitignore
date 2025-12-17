@@ -38,3 +38,9 @@ yarn-error.*
 # generated native folders
 /ios
 /android
+
+# Environment files (but keep .env.example)
+.env
+.env.local
+.env.production
+.env.development

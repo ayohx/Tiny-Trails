@@ -21,11 +21,15 @@ export const theme = {
     // UI Colors
     background: '#FFFFFF',
     text: '#2D3748',
+    textSecondary: '#718096',
     border: '#E2E8F0',
     success: '#58C472',
     error: '#FF6B6B',
     warning: '#FFC940',
     info: '#3DA9F5',
+    disabled: '#CBD5E0',
+    primaryLight: '#E8F7ED',
+    errorLight: '#FFF5F5',
     
     // Rainbow Gradient for Tracing
     rainbow: [

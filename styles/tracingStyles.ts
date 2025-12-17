@@ -80,4 +80,22 @@ export const styles = StyleSheet.create({
     color: '#4A5568',
     textAlign: 'center',
   },
+  
+  // Phase 2: Bottom toolbar styles
+  bottomToolbar: {
+    width: '100%',
+    paddingHorizontal: theme.spacing.md,
+    paddingVertical: theme.spacing.lg,
+    backgroundColor: theme.colors.background,
+    borderTopWidth: 1,
+    borderTopColor: theme.colors.border,
+    borderRadius: 16,
+    marginTop: theme.spacing.md,
+  },
+  
+  toolbarDivider: {
+    height: 1,
+    backgroundColor: theme.colors.border,
+    marginVertical: theme.spacing.md,
+  },
 });
